@@ -1,4 +1,4 @@
-# Official Implementation of DuplexGen: Adaptive Synthesis of Human–AI Turn-Taking Dialogues
+# Official Implementation of "DuplexGen: Adaptive Synthesis of Human–AI Turn-Taking Dialogues" (EMNLP 2026)
 
 [Takyoung Kim](https://youngerous.github.io/)<sup>&ast;</sup>,
 [Kang-wook Kim](https://kwkim.me/)<sup>&ast;</sup>,
