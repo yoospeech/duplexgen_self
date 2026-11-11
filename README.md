@@ -47,7 +47,127 @@ This starts from a bundled Stage 4 example and does not run an LLM. Full data
 generation still follows DuplexGen Stages 1–4. See the
 [Indonesian guide](README.id.md) for GPU index overrides and bulk rendering.
 
-This project needs **two separate environments**. Stage 5 pins
+### Indonesian OmniVoice: Conda install to inference
+
+Use a dedicated Python 3.11 environment. OmniVoice is installed from PyPI; no
+Git submodule is required.
+
+```bash
+conda create -n duplex-omnivoice python=3.11 -y
+conda activate duplex-omnivoice
+python -m pip install --upgrade pip setuptools wheel
+```
+
+Install the PyTorch build for the inference host. CUDA 12.8:
+
+```bash
+python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+```
+
+CPU-only smoke testing:
+
+```bash
+python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cpu
+```
+
+Install the pinned OmniVoice release and check the environment:
+
+```bash
+python -m pip install omnivoice==0.2.1 soundfile
+python -c 'import torch, omnivoice, soundfile; print(torch.__version__, torch.cuda.is_available())'
+```
+
+First run a single Indonesian utterance. The model is downloaded from Hugging
+Face automatically on first use. The script uses `float16` on GPU and
+`float32` on CPU.
+
+```bash
+python tools/smoke_test_omnivoice.py \
+  --voice_mode auto \
+  --device cuda:0 \
+  --num_steps 16 \
+  --output outputs/omnivoice-smoke.wav
+```
+
+Use `--device cpu` on a CPU host. A successful run prints `PASS` and writes a
+finite 24 kHz WAV.
+
+Next render the bundled multi-turn Stage 4 example. It exercises channel-level
+speaker consistency, backchannels, and floor-taking overlap without requiring
+an LLM server:
+
+```bash
+python tools/render_smoke_dialogue_omnivoice.py \
+  --input examples/indonesian_slot_dialogue.json \
+  --output outputs/omnivoice-id-dialogue.wav \
+  --voice_mode auto \
+  --device cuda:0 \
+  --num_steps 16 \
+  --interrupt_overlap 0.6
+```
+
+The outputs are a stereo WAV and a same-stem event JSON. Channel 0 is the
+assistant and channel 1 is the user. Each channel keeps one speaker identity
+for the dialogue. Use `--device cpu` for CPU inference and raise
+`--num_steps` to 32 after the smoke output passes listening checks.
+
+For full Stage 5 dataset rendering, install alignment and VAD dependencies:
+
+```bash
+python -m pip install whisperx silero-vad nltk nemo-text-processing
+```
+
+Validate one Stage 4 JSON before starting a bulk job:
+
+```bash
+python tts_render/convert_spoken.py \
+  --tts_backend omnivoice \
+  --omnivoice_voice_mode auto \
+  --language id \
+  --align_model m-salman-a/wav2vec2-xlsr-53-common-voice-indonesian \
+  --omnivoice_device cuda:0 \
+  --omnivoice_align_device cuda \
+  --omnivoice_dtype float16 \
+  --omnivoice_num_steps 16 \
+  --input_glob 'outputs/generated-dialogues-id/**/*.json' \
+  --save_dir outputs/audios-omnivoice-id \
+  --num_variants 1 \
+  --max_dialogues 1
+```
+
+After validation, remove `--max_dialogues 1`, set
+`--omnivoice_num_steps 32`, and point `--input_glob` and `--save_dir` at the
+production volumes. An eight-GPU server can run disjoint workers as follows:
+
+```bash
+for shard in $(seq 0 7); do
+  CUDA_VISIBLE_DEVICES="$shard" python tts_render/convert_spoken.py \
+    --tts_backend omnivoice \
+    --omnivoice_voice_mode auto \
+    --language id \
+    --align_model m-salman-a/wav2vec2-xlsr-53-common-voice-indonesian \
+    --omnivoice_device cuda:0 \
+    --omnivoice_align_device cuda \
+    --omnivoice_dtype float16 \
+    --omnivoice_num_steps 32 \
+    --input_glob '/data/dialogues-id/**/*.json' \
+    --save_dir /data/audios-omnivoice-id \
+    --num_variants 1 \
+    --num_shards 8 \
+    --shard_id "$shard" \
+    > "omnivoice-shard-${shard}.log" 2>&1 &
+done
+wait
+```
+
+At 24 kHz, 16-bit stereo, 1,000 hours of final dialogue audio is approximately
+346 GB. Per-utterance copies can bring the working total close to 692 GB before
+metadata and filesystem overhead. See the [Indonesian guide](README.id.md) for
+Stages 1–4 text generation and the complete slot-filling flow.
+
+The original Chatterbox path needs **two separate environments**. Stage 5 pins
 `transformers==4.46.3` through the vendored Chatterbox package, while Stage 3
 requires `transformers>=4.53`; they cannot share an interpreter.
 
