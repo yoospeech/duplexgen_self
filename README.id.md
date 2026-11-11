@@ -12,72 +12,84 @@ Human–AI Turn-Taking Dialogues**. The Indonesian path uses an OpenAI-compatibl
 open-weight LLM and supports `k2-fsa/OmniVoice` as the primary multi-turn TTS
 backend. Pocket TTS remains available as an alternative Indonesian backend.
 
-## Python environments
+## OmniVoice: Conda install to inference
 
-### Quick install and synthesis
-
-From a fresh checkout, this command creates an isolated Python 3.11
-environment, installs the appropriate CPU or CUDA PyTorch wheel and OmniVoice,
-downloads `k2-fsa/OmniVoice` on first use, and renders the bundled Indonesian
-slot-dialogue example:
+Keep OmniVoice in a dedicated Python 3.11 environment. The pinned PyPI release
+is used directly; no Git submodule is required.
 
 ```bash
-bash tools/quickstart_omnivoice_id.sh
+git clone https://github.com/yoospeech/duplexgen_self.git
+cd duplexgen_self
+conda create -n duplex-omnivoice python=3.11 -y
+conda activate duplex-omnivoice
+python -m pip install --upgrade pip setuptools wheel
 ```
 
-The quickstart starts from a bundled Stage 4 example; it tests installation and
-TTS but does not run an LLM. The production path still uses DuplexGen Stages
-1–4 to generate dialogue text, identify slots, and select turn-taking actions.
-
-The outputs are `outputs/omnivoice-id-quickstart.wav` and a same-stem event
-JSON. Pass a different Stage 4 JSON and output path as positional arguments:
+Install PyTorch for the host. Use one of these commands, not both.
 
 ```bash
-bash tools/quickstart_omnivoice_id.sh \
-  /data/dialogues-id/text_dialogue_interviewer/train/example.json \
-  /data/smoke/example.wav
+# NVIDIA CUDA 12.8
+python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+
+# CPU-only smoke testing
+python -m pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cpu
 ```
 
-GPU hosts default to the CUDA 12.8 PyTorch index. Override it when the server
-uses another build:
+Install OmniVoice and verify the environment:
 
 ```bash
-OMNIVOICE_TORCH_INDEX=https://download.pytorch.org/whl/cu126 \
-  bash tools/quickstart_omnivoice_id.sh
+python -m pip install omnivoice==0.2.1 soundfile
+python -c 'import torch, omnivoice, soundfile; print(torch.__version__, torch.cuda.is_available())'
 ```
 
-The script defaults to 16 diffusion steps for a quick check. Set
-`OMNIVOICE_NUM_STEPS=32` for the production-quality setting.
-
-Use this interpreter for dialogue generation:
+Run a single Indonesian utterance first. The initial run downloads
+`k2-fsa/OmniVoice` from Hugging Face. The script chooses `float16` on GPU and
+`float32` on CPU.
 
 ```bash
-/home/ysw/workspace/anaconda3/envs/duplexgen/bin/python
+python tools/smoke_test_omnivoice.py \
+  --voice_mode auto \
+  --device cuda:0 \
+  --num_steps 16 \
+  --output outputs/omnivoice-smoke.wav
 ```
 
-Use this interpreter for Indonesian Pocket TTS:
+Use `--device cpu` on a CPU host. A successful run prints `PASS`. Then verify
+the bundled multi-turn Stage 4 example:
 
 ```bash
-/home/ysw/workspace/anaconda3/envs/duplextts/bin/python
+python tools/render_smoke_dialogue_omnivoice.py \
+  --input examples/indonesian_slot_dialogue.json \
+  --output outputs/omnivoice-id-dialogue.wav \
+  --voice_mode auto \
+  --device cuda:0 \
+  --num_steps 16 \
+  --interrupt_overlap 0.6
 ```
 
-The `duplextts` environment uses Pocket TTS 3.1.0 and NumPy 2. It cannot also
-run the vendored Chatterbox backend, which requires NumPy 1.x.
+This writes a 24 kHz stereo WAV and a same-stem event JSON. Channel 0 is the
+assistant and channel 1 is the user. Each channel retains one speaker identity;
+backchannels overlap the listener channel and floor-taking starts the next turn
+early. Use 16 diffusion steps for validation and 32 after listening checks.
 
-Use a fresh Python 3.11 environment for OmniVoice:
+The smoke path uses a bundled Stage 4 JSON and does not invoke an LLM. The full
+production path still uses DuplexGen Stages 1–4 for text, slot identification,
+and turn-taking decisions before Stage 5 audio rendering.
+
+As a shorter alternative, `bash tools/quickstart_omnivoice_id.sh` creates its
+own venv and performs the bundled multi-turn test. Do not mix that venv with
+the Conda environment.
+
+For full Stage 5 rendering, install alignment and VAD dependencies:
 
 ```bash
-python3.11 -m venv .venv-tts-omnivoice
-source .venv-tts-omnivoice/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements-stage5-omnivoice.txt
-pip install whisperx silero-vad nltk nemo-text-processing
+python -m pip install whisperx silero-vad nltk nemo-text-processing
 ```
 
-On an NVIDIA server, install the PyTorch wheel matching its CUDA version before
-the remaining packages. OmniVoice, Chatterbox, and Pocket TTS should stay in
-separate environments because their PyTorch, Transformers, and NumPy versions
-can conflict.
+Keep OmniVoice, Chatterbox, and Pocket TTS in separate environments because
+their PyTorch, Transformers, and NumPy requirements can conflict.
 
 ## Multi-turn Indonesian flow
 
@@ -186,31 +198,6 @@ backchannels. Indonesian examples include `iya`, `hmm`, `baik`, and
 `oh begitu`. The program keeps `[TAKE_FLOOR]`, `[BACKCHANNEL]`, role names, and
 JSON keys unchanged.
 
-## OmniVoice multi-turn smoke test
-
-First verify prompt-free Indonesian synthesis:
-
-```bash
-.venv-tts-omnivoice/bin/python tools/smoke_test_omnivoice.py \
-  --voice_mode auto \
-  --text 'Selamat pagi, ada yang bisa saya bantu hari ini?' \
-  --output outputs/omnivoice-id-auto-smoke.wav
-```
-
-Then render a Stage 4 dialogue containing slot decisions:
-
-```bash
-.venv-tts-omnivoice/bin/python tools/render_smoke_dialogue_omnivoice.py \
-  --voice_mode auto \
-  --input outputs/sea-lion-with-tt-bc/text_dialogue_interviewer/train/sea_lion_0002.json \
-  --output outputs/omnivoice-id-slot-dialogue-smoke.wav \
-  --num_steps 16 --interrupt_overlap 0.6
-```
-
-This produces a 24 kHz stereo WAV and a same-stem JSON event timeline. The
-validated sample contains one assistant backchannel over the user and two
-0.6-second floor-taking overlaps.
-
 ## Pocket TTS smoke test (alternative)
 
 Pocket TTS expects numbers to be written as spoken Indonesian words. For
@@ -254,7 +241,7 @@ The verified smoke output has the following properties:
 Run one small Stage 5 trial before a bulk render:
 
 ```bash
-.venv-tts-omnivoice/bin/python tts_render/convert_spoken.py \
+python tts_render/convert_spoken.py \
   --tts_backend omnivoice \
   --omnivoice_voice_mode auto \
   --omnivoice_device cuda:0 \
@@ -276,7 +263,7 @@ For an eight-GPU server, run one disjoint shard per GPU:
 
 ```bash
 for shard in $(seq 0 7); do
-  CUDA_VISIBLE_DEVICES=$shard .venv-tts-omnivoice/bin/python \
+  CUDA_VISIBLE_DEVICES=$shard python \
     tts_render/convert_spoken.py \
     --tts_backend omnivoice --omnivoice_voice_mode auto --language id \
     --omnivoice_device cuda:0 --omnivoice_align_device cuda \
