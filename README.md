@@ -47,29 +47,37 @@ This starts from a bundled Stage 4 example and does not run an LLM. Full data
 generation still follows DuplexGen Stages 1–4. See the
 [Indonesian guide](README.id.md) for GPU index overrides and bulk rendering.
 
-The original Chatterbox path needs **two separate environments**. Stage 5 pins
-`transformers==4.46.3` through the vendored Chatterbox package, while Stage 3
-requires `transformers>=4.53`; they cannot share an interpreter.
+The recommended Indonesian path uses two environments: one for Stages 1–4 and
+one for OmniVoice Stage 5. Keep the TTS environment separate because its
+PyTorch and Transformers versions can conflict with the generation pipeline.
 
 ```bash
 # Stages 1-4: dialogue generation, slot identification, prediction, synthesis
 python3 -m venv .venv                       # Python 3.10+
 .venv/bin/pip install -r requirements.txt
 
-# Stage 5: TTS rendering. Python 3.11 ONLY (Chatterbox requires >=3.11,<3.12)
-python3.11 -m venv .venv-tts
-.venv-tts/bin/pip install -r requirements-stage5.txt
-.venv-tts/bin/pip install -e duplexgen/tts/chatterbox
-
-# Optional Indonesian OmniVoice backend (keep separate from Chatterbox)
+# Stage 5: Indonesian OmniVoice rendering, Python 3.11
 python3.11 -m venv .venv-tts-omnivoice
+.venv-tts-omnivoice/bin/pip install --upgrade pip setuptools wheel
+
+# NVIDIA CUDA 12.8; use the /cpu index for a CPU-only smoke test
+.venv-tts-omnivoice/bin/pip install torch==2.8.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu128
 .venv-tts-omnivoice/bin/pip install -r requirements-stage5-omnivoice.txt
+
+# Required by the full Stage 5 renderer; not needed for the basic smoke script
+.venv-tts-omnivoice/bin/pip install \
+  whisperx silero-vad nltk nemo-text-processing
 ```
+
+OmniVoice is installed from the pinned PyPI release; no Git submodule is
+required. Chatterbox and Pocket TTS remain supported as alternative backends;
+install them in separate environments using [Stage 5](docs/stage5-tts.md).
 
 **Run everything from the repository root.** Stages 1-4 are modules of the
 `src/` package, invoked as `.venv/bin/python -m src.<module>`, not as file
 paths. The Stage 5 scripts are run as files with the *other* interpreter
-(`.venv-tts/bin/python tts_render/convert_spoken.py`). The Stage 1-4
+(`.venv-tts-omnivoice/bin/python tts_render/convert_spoken.py`). The Stage 1-4
 environment can also be installed as a package (`.venv/bin/pip install -e .`),
 which puts the `src` modules on the path from anywhere.
 
@@ -79,11 +87,10 @@ and installs cleanly there. macOS and `aarch64` have no wheel and need OpenFst
 headers first — `sudo apt-get install -y libfst-dev`, or take `pynini` from
 conda-forge to avoid the build entirely.
 
-**Reproducing our exact environment.** The requirements files carry ranges;
+**Reproducing the Stage 1–4 environment.** The requirements files carry ranges;
 `constraints.txt` carries the exact versions the pipeline was last validated
-against, and covers the Stage 1-4 (`.venv`) environment only. Stage 5's
-versions come from the vendored `duplexgen/tts/chatterbox/pyproject.toml` plus
-the `numpy<2` bound in `requirements-stage5.txt`.
+against and covers the Stage 1–4 (`.venv`) environment. OmniVoice Stage 5 uses
+the pinned versions in `requirements-stage5-omnivoice.txt`.
 
 ```bash
 .venv/bin/pip install -r requirements.txt -c constraints.txt
@@ -143,11 +150,12 @@ export OPENAI_API_KEY=sk-...
   --llm_model_name gpt-4.1 --boundary_model_name gpt-4.1-mini \
   --hf_model_name_or_path ./output/turntaking_qwen3_4b --hf_load_in_4bit
 
-# Stage 5 -- render to two-channel audio (note the other interpreter)
-.venv-tts/bin/python tts_render/convert_spoken.py \
-  --prompt_dir tts_render/prompt_wavs \
+# Stage 5 -- render with prompt-free OmniVoice (note the other interpreter)
+.venv-tts-omnivoice/bin/python tts_render/convert_spoken.py \
+  --tts_backend omnivoice --omnivoice_voice_mode auto --language en \
+  --omnivoice_device cuda:0 --omnivoice_align_device cuda \
   --input_glob 'outputs/generated_dialogues_with_tt/**/*.json' \
-  --save_dir outputs/audios_chatterbox --num_variants 10
+  --save_dir outputs/audios_omnivoice --num_variants 1
 ```
 
 Stage 3 training is optional if you only want to generate dialogues — Stage 4
