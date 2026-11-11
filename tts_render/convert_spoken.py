@@ -1,6 +1,5 @@
 import os
 import argparse
-import shutil
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -16,17 +15,14 @@ import whisperx
 from glob import glob
 import copy
 
-from chatterbox.tts_turbo import ChatterboxTurboTTS
-
 from bc_cache import BackchannelCache
+from omnivoice_backend import OmniVoiceTTS
 
 import nltk
 
 nltk.download("punkt")
 nltk.download("punkt_tab")
 from nltk import sent_tokenize
-
-from nemo_text_processing.text_normalization.normalize import Normalizer
 
 import logging
 
@@ -59,18 +55,31 @@ def normalize_audio(waveform, ratio=1.0):
     return normalized_waveform
 
 
-def load_assistant_prompt_path(
-    prompt_dir: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_wavs"),
-):
+def load_assistant_prompt_path(prompt_dir: str, assistant_prompt: str = ""):
     """Return the fixed assistant prompt audio file path (assistant_en.wav).
 
     A single held-out LibriSpeech train-clean-100 speaker, never drawn from the
     per-variant user voice pool. See prompt_wavs/PROVENANCE.md.
     """
-    path = os.path.join(prompt_dir, "assistant_en.wav")
+    path = assistant_prompt or os.path.join(prompt_dir, "assistant_en.wav")
     if not os.path.exists(path):
         raise FileNotFoundError(f"Prompt file not found: {path}")
     return path
+
+
+def list_voice_prompts(voice_dir: str, exclude_paths=()):
+    """Return a speaker pool from local Indonesian WAV/FLAC voice prompts."""
+    excluded = {str(Path(path).resolve()) for path in exclude_paths}
+    speakers = {}
+    for pattern in ("**/*.wav", "**/*.flac", "**/*.mp3"):
+        for path in sorted(Path(voice_dir).glob(pattern)):
+            if str(path.resolve()) in excluded:
+                continue
+            speaker_id = path.parent.name if path.parent != Path(voice_dir) else path.stem
+            speakers.setdefault(speaker_id, []).append(str(path))
+    if not speakers:
+        raise FileNotFoundError(f"No WAV/FLAC/MP3 voice prompts found under {voice_dir}")
+    return speakers
 
 
 def list_librispeech_speakers(librispeech_root: str, subsets, exclude=None):
@@ -211,7 +220,7 @@ def _sent_split(text: str):
         return chunks or [text]
 
 
-def count_words_for_align(text: str, normalizer: Normalizer = None) -> int:
+def count_words_for_align(text: str, normalizer=None) -> int:
     t = text.replace("[BACKCHANNEL]", "").replace("[TAKE_FLOOR]", "")
     t = (
         t.replace("[interrupted]", "")
@@ -593,19 +602,58 @@ def aggregate_speech(total_speech, total_speech_meta):
     return merged_speech
 
 
-def generate_audio(model, tts_text, audio_prompt_path):
-    """Generate speech with ChatterboxTurboTTS. Returns [1, T] tensor at TARGET_SR."""
-    wav = model.generate(tts_text, audio_prompt_path=audio_prompt_path)
+def generate_audio(model, tts_text, audio_prompt_path, speaker_id=None):
+    """Generate speech with the selected backend. Returns [1, T] at TARGET_SR."""
+    generate_args = {"audio_prompt_path": audio_prompt_path}
+    if getattr(model, "supports_speaker_id", False):
+        generate_args["speaker_id"] = speaker_id
+    wav = model.generate(tts_text, **generate_args)
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)
     return wav
+
+
+class PocketIndonesianTTS:
+    """Adapter exposing Pocket TTS through the interface used by this renderer."""
+
+    def __init__(self, config: str, device: str):
+        try:
+            from pocket_tts import TTSModel
+        except ImportError as exc:
+            raise RuntimeError("Pocket TTS backend requires `pip install pocket-tts`.") from exc
+
+        self.model = TTSModel.load_model(config=config, eos_threshold=-6.0)
+        self.model.to(device)
+        self.sr = self.model.sample_rate
+        self._prompt_tmpdir = tempfile.TemporaryDirectory(prefix="pocket-prompts-")
+        self._converted_prompts = {}
+
+    def _wav_prompt(self, audio_prompt_path: str) -> str:
+        """Pocket's local-path reader accepts RIFF WAV only; convert other formats."""
+        path = str(audio_prompt_path)
+        if path.startswith("hf://") or Path(path).suffix.lower() == ".wav":
+            return path
+        if path not in self._converted_prompts:
+            audio, sample_rate = torchaudio.load(path)
+            if audio.size(0) > 1:
+                audio = audio.mean(dim=0, keepdim=True)
+            target = Path(self._prompt_tmpdir.name) / f"prompt-{len(self._converted_prompts)}.wav"
+            torchaudio.save(str(target), audio, sample_rate, encoding="PCM_S", bits_per_sample=16)
+            self._converted_prompts[path] = str(target)
+        return self._converted_prompts[path]
+
+    def generate(self, text: str, audio_prompt_path: str):
+        state = self.model.get_state_for_audio_prompt(
+            self._wav_prompt(audio_prompt_path), truncate=True
+        )
+        return self.model.generate_audio(state, text, copy_state=False)
 
 
 def _save_cumulative_prompt(audio: torch.Tensor, path: str):
     """Trim to MAX_PROMPT_SECS and save to path for use as next voice prompt."""
     max_samples = MAX_PROMPT_SECS * TARGET_SR
     trimmed = audio[:, -max_samples:] if audio.size(1) > max_samples else audio
-    torchaudio.save(path, trimmed, TARGET_SR)
+    torchaudio.save(path, trimmed, TARGET_SR, encoding="PCM_S", bits_per_sample=16)
 
 
 def main_process(
@@ -622,21 +670,30 @@ def main_process(
     init_spk = dialogue["utterances_with_bc"][0]["speaker"]
     spk_offset = 1 if init_spk == DEFAULT_SPEAKERS[1] else 0
 
-    # Cumulative prompt paths: start as copies of the initial prompt files
-    cumulative_prompt_paths = [os.path.join(tmpdir, f"cumulative_{i}.wav") for i in range(2)]
-    for i, p in enumerate(prompt_paths):
-        shutil.copyfile(p, cumulative_prompt_paths[i])
-        os.chmod(cumulative_prompt_paths[i], 0o644)
-
-    # Keep cumulative audio tensors for trimming/updating
-    cumulative_audio = []
-    for p in prompt_paths:
-        wav, sr = torchaudio.load(p)
-        if sr != TARGET_SR:
-            wav = torchaudio.transforms.Resample(orig_freq=sr, new_freq=TARGET_SR)(wav)
-        if wav.shape[0] > 1:
-            wav = wav.mean(dim=0, keepdim=True)
-        cumulative_audio.append(wav)
+    uses_cumulative_prompt = getattr(model, "uses_cumulative_prompt", True)
+    requires_prompt = getattr(model, "requires_prompt", True)
+    if requires_prompt:
+        # Cumulative prompts must be real RIFF WAV files. Pocket's sample voice pool
+        # may contain MP3s, so copying bytes into a .wav name is not sufficient.
+        cumulative_prompt_paths = [os.path.join(tmpdir, f"cumulative_{i}.wav") for i in range(2)]
+        initial_prompt_audio = []
+        for i, p in enumerate(prompt_paths):
+            wav, sr = torchaudio.load(p)
+            if sr != TARGET_SR:
+                wav = torchaudio.transforms.Resample(orig_freq=sr, new_freq=TARGET_SR)(wav)
+            if wav.shape[0] > 1:
+                wav = wav.mean(dim=0, keepdim=True)
+            initial_prompt_audio.append(wav)
+            _save_cumulative_prompt(wav, cumulative_prompt_paths[i])
+        cumulative_audio = [wav.clone() for wav in initial_prompt_audio]
+        generation_prompt_paths = (
+            cumulative_prompt_paths if uses_cumulative_prompt else prompt_paths
+        )
+    else:
+        cumulative_prompt_paths = [None, None]
+        initial_prompt_audio = [None, None]
+        cumulative_audio = [None, None]
+        generation_prompt_paths = [None, None]
 
     bc_cache = BackchannelCache()
     bc_queue = [[], []]
@@ -717,14 +774,20 @@ def main_process(
                         speech_ = bc_cache.get(curr_idx, sentence_)
                         if speech_ is None:
                             speech_ = generate_audio(
-                                model, bc_sentence, cumulative_prompt_paths[curr_idx]
+                                model,
+                                bc_sentence,
+                                generation_prompt_paths[curr_idx],
+                                speaker_id=curr_idx,
                             )
                             bc_cache.put(curr_idx, sentence_, speech_)
                         else:
                             speech_ = speech_.clone()
                     else:
                         speech_ = generate_audio(
-                            model, sentence_clean, cumulative_prompt_paths[curr_idx]
+                            model,
+                            sentence_clean,
+                            generation_prompt_paths[curr_idx],
+                            speaker_id=curr_idx,
                         )
 
                     # VAD trim between sentences (not the last one)
@@ -747,7 +810,7 @@ def main_process(
                     speech_ = normalize_audio(speech_, ratio=volume_ratio)
 
                     # Update cumulative voice prompt with non-backchannel audio
-                    if utterance["uttr_type"] != "backchannel":
+                    if uses_cumulative_prompt and utterance["uttr_type"] != "backchannel":
                         cumulative_audio[curr_idx] = torch.cat(
                             (cumulative_audio[curr_idx], speech_), dim=1
                         )
@@ -789,7 +852,7 @@ def main_process(
                         speech_end_idx = int(speech_timestamps[-1]["end"] * TARGET_SR / PROMPT_SR)
 
                     # Trim trailing silence from cumulative prompt
-                    if tts_speech.size(1) != speech_end_idx:
+                    if uses_cumulative_prompt and tts_speech.size(1) != speech_end_idx:
                         sil_len = tts_speech.size(1) - speech_end_idx
                         cumulative_audio[curr_idx] = cumulative_audio[curr_idx][:, :-sil_len]
                         _save_cumulative_prompt(
@@ -800,19 +863,13 @@ def main_process(
 
                 tts_texts[curr_idx] = ""
 
-                if is_last_text:
+                if uses_cumulative_prompt and is_last_text:
                     if next_uttr_type is None or next_uttr_type == "interrupt":
                         # Reset cumulative prompt to initial
-                        shutil.copyfile(prompt_paths[curr_idx], cumulative_prompt_paths[curr_idx])
-                        os.chmod(cumulative_prompt_paths[curr_idx], 0o644)
-                        wav, sr = torchaudio.load(prompt_paths[curr_idx])
-                        if sr != TARGET_SR:
-                            wav = torchaudio.transforms.Resample(orig_freq=sr, new_freq=TARGET_SR)(
-                                wav
-                            )
-                        if wav.shape[0] > 1:
-                            wav = wav.mean(dim=0, keepdim=True)
-                        cumulative_audio[curr_idx] = wav
+                        cumulative_audio[curr_idx] = initial_prompt_audio[curr_idx].clone()
+                        _save_cumulative_prompt(
+                            cumulative_audio[curr_idx], cumulative_prompt_paths[curr_idx]
+                        )
 
             if utterance["uttr_type"] == "backchannel":
                 host_text = tts_texts[other_idx]
@@ -854,7 +911,7 @@ def main_process(
                         model_a,
                         metadata,
                         tts_speech_16k,
-                        "cuda",
+                        align["device"],
                         return_char_alignments=False,
                     )
                     all_words = []
@@ -976,22 +1033,41 @@ def main(args):
     # Resolve every input before touching a GPU: loading Chatterbox, whisperx and the
     # NeMo grammars costs a couple of minutes, and a mistyped --input_glob or a missing
     # prompt wav should not cost that before it is reported.
-    assistant_prompt_path = load_assistant_prompt_path(args.prompt_dir)
-
-    # Build LibriSpeech speaker pool once
-    libri_subsets = [s.strip() for s in args.librispeech_subsets.split(",") if s.strip()]
-    speaker_pool = list_librispeech_speakers(
-        args.librispeech_root, libri_subsets, exclude={ASSISTANT_SPEAKER_ID}
+    omnivoice_auto = args.tts_backend == "omnivoice" and args.omnivoice_voice_mode == "auto"
+    assistant_prompt_path = (
+        "" if omnivoice_auto else load_assistant_prompt_path(args.prompt_dir, args.assistant_prompt)
     )
-    logging.info(f"LibriSpeech pool: {len(speaker_pool)} speakers from {libri_subsets}")
 
-    if len(speaker_pool) < args.num_variants:
+    uses_local_voice_pool = args.tts_backend == "pocket_indonesian" or (
+        args.tts_backend == "omnivoice" and bool(args.voice_dir)
+    )
+    if args.tts_backend == "omnivoice" and not omnivoice_auto and args.language != "en":
+        if not args.voice_dir or not args.assistant_prompt:
+            raise SystemExit(
+                "Non-English OmniVoice rendering requires both --voice_dir and "
+                "--assistant_prompt with reference speech in the target language."
+            )
+    if omnivoice_auto:
+        speaker_pool = {}
+        pool_description = "OmniVoice auto voice mode"
+    elif uses_local_voice_pool:
+        if not args.voice_dir:
+            raise SystemExit(f"--voice_dir is required with --tts_backend {args.tts_backend}")
+        speaker_pool = list_voice_prompts(args.voice_dir, exclude_paths={assistant_prompt_path})
+        pool_description = args.voice_dir
+    else:
+        libri_subsets = [s.strip() for s in args.librispeech_subsets.split(",") if s.strip()]
+        speaker_pool = list_librispeech_speakers(
+            args.librispeech_root, libri_subsets, exclude={ASSISTANT_SPEAKER_ID}
+        )
+        pool_description = f"{args.librispeech_root} ({libri_subsets})"
+    logging.info(f"Voice pool: {len(speaker_pool)} speakers from {pool_description}")
+
+    if not omnivoice_auto and len(speaker_pool) < args.num_variants:
         raise SystemExit(
             f"--num_variants {args.num_variants} needs that many distinct user voices, but "
-            f"{args.librispeech_root} yields only {len(speaker_pool)} speakers for subsets "
-            f"{libri_subsets}. Lower --num_variants, or point --librispeech_root at a full "
-            "LibriSpeech download (https://www.openslr.org/12) and widen "
-            "--librispeech_subsets. The bundled sample holds 12 speakers."
+            f"the selected voice pool yields only {len(speaker_pool)} speakers. "
+            "Lower --num_variants or add distinct speaker prompts."
         )
 
     seen = set()
@@ -1033,28 +1109,57 @@ def main(args):
 
     logging.info(f"Found {len(json_files)} files to process.")
 
-    # Patch Perth watermarker if the native library fails to initialize
-    import perth
+    if args.tts_backend == "pocket_indonesian":
+        model = PocketIndonesianTTS(args.pocket_config, args.pocket_device)
+    elif args.tts_backend == "omnivoice":
+        model = OmniVoiceTTS(
+            args.omnivoice_model,
+            args.omnivoice_device,
+            args.omnivoice_dtype,
+            args.omnivoice_num_steps,
+            args.language,
+            args.omnivoice_prompt_cache_size,
+            args.omnivoice_voice_mode,
+        )
+    else:
+        import perth
 
-    try:
-        perth.PerthImplicitWatermarker()
-    except TypeError:
+        try:
+            perth.PerthImplicitWatermarker()
+        except TypeError:
 
-        class _NoOpWatermarker:
-            def apply_watermark(self, audio, sample_rate):
-                return audio
+            class _NoOpWatermarker:
+                def apply_watermark(self, audio, sample_rate):
+                    return audio
 
-        perth.PerthImplicitWatermarker = _NoOpWatermarker
+            perth.PerthImplicitWatermarker = _NoOpWatermarker
 
-    # Load models
-    model = ChatterboxTurboTTS.from_pretrained(device="cuda")
+        from chatterbox.tts_turbo import ChatterboxTurboTTS
+
+        model = ChatterboxTurboTTS.from_pretrained(device="cuda")
     TARGET_SR = model.sr
 
     vad_model = load_silero_vad()
-    model_a, metadata = whisperx.load_align_model(language_code="en", device="cuda")
-    align = {"model_a": model_a, "metadata": metadata}
+    align_language = "id" if args.tts_backend == "pocket_indonesian" else args.language
+    if args.tts_backend == "pocket_indonesian":
+        align_device = args.pocket_device
+    elif args.tts_backend == "omnivoice":
+        align_device = args.omnivoice_align_device
+    else:
+        align_device = "cuda"
+    model_a, metadata = whisperx.load_align_model(
+        language_code=align_language,
+        device=align_device,
+        model_name=args.align_model or None,
+    )
+    align = {"model_a": model_a, "metadata": metadata, "device": align_device}
 
-    normalizer = Normalizer(input_case="cased", lang="en")
+    if align_language == "en":
+        from nemo_text_processing.text_normalization.normalize import Normalizer
+
+        normalizer = Normalizer(input_case="cased", lang="en")
+    else:
+        normalizer = None
 
     n_rendered = n_skipped = n_dropped = n_failed = 0
 
@@ -1081,13 +1186,20 @@ def main(args):
         dialogue_rng = random.Random(dialogue_seed)
 
         # Sample N distinct LibriSpeech speakers up-front
-        try:
-            voice_picks = sample_n_librispeech_prompts(
-                speaker_pool, args.num_variants, dialogue_rng, min_duration_sec=5.0
-            )
-        except FileNotFoundError as e:
-            logging.warning(f"Skip (voice sampling failed): {fpath} ({e})")
-            continue
+        if omnivoice_auto:
+            voice_picks = [(f"auto-{i:02d}", "") for i in range(args.num_variants)]
+        else:
+            try:
+                min_prompt_duration = 3.0 if uses_local_voice_pool else 5.0
+                voice_picks = sample_n_librispeech_prompts(
+                    speaker_pool,
+                    args.num_variants,
+                    dialogue_rng,
+                    min_duration_sec=min_prompt_duration,
+                )
+            except FileNotFoundError as e:
+                logging.warning(f"Skip (voice sampling failed): {fpath} ({e})")
+                continue
 
         dialogue_id = fpath.stem
         rel_dialogue_dir = Path(*fpath.parts[-3:-1]) / dialogue_id  # text_dialogue_X/train/<id>
@@ -1108,7 +1220,7 @@ def main(args):
             # Reset Python/torch RNGs each variant so timing/sampling stays consistent.
             # dialogue_rng above chose the voice cast and is deliberately not reused here:
             # every dialogue's var<NN> draws the same TTS/timing randomness.
-            seed_var = args.seed + variant_idx
+            seed_var = dialogue_seed + variant_idx if omnivoice_auto else args.seed + variant_idx
             random.seed(seed_var)
             np.random.seed(seed_var)
             torch.manual_seed(seed_var)
@@ -1116,6 +1228,8 @@ def main(args):
                 torch.cuda.manual_seed_all(seed_var)
 
             try:
+                if hasattr(model, "reset_auto_speakers"):
+                    model.reset_auto_speakers()
                 with tempfile.TemporaryDirectory() as tmpdir:
                     merged_speech, total_speech, backchannel_list, total_speech_meta = main_process(
                         model,
@@ -1165,6 +1279,10 @@ def main(args):
             total_speech_meta["user_prompt_speaker_id"] = libri_spk
             total_speech_meta["variant_idx"] = variant_idx
             total_speech_meta["turn_gap_sec"] = TURN_GAP_SEC
+            total_speech_meta["tts_backend"] = args.tts_backend
+            total_speech_meta["language"] = align_language
+            if args.tts_backend == "omnivoice":
+                total_speech_meta["omnivoice_voice_mode"] = args.omnivoice_voice_mode
 
             with open(save_json_fpath, "w") as jf:
                 json.dump(total_speech_meta, jf, indent=4)
@@ -1186,9 +1304,87 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--tts_backend",
+        choices=["chatterbox", "pocket_indonesian", "omnivoice"],
+        default="chatterbox",
+    )
+    parser.add_argument(
+        "--language",
+        default="en",
+        help="WhisperX alignment language code (used by Chatterbox and OmniVoice).",
+    )
+    parser.add_argument(
         "--prompt_dir",
         default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_wavs"),
         help="Directory containing assistant_en.wav (assistant prompt)",
+    )
+    parser.add_argument(
+        "--assistant_prompt",
+        default="",
+        help="Assistant voice prompt WAV/FLAC. Required in practice for Indonesian.",
+    )
+    parser.add_argument(
+        "--voice_dir",
+        default="",
+        help="Directory of local user voice prompts for Pocket TTS or multilingual OmniVoice.",
+    )
+    parser.add_argument(
+        "--pocket_config",
+        default=(
+            "hf://anak10thn/pocket-tts-indonesian/indonesian_6l.yaml"
+            "@17257664e384561c957b02ac92edd1a24807f0e5"
+        ),
+        help="Pocket TTS Indonesian model config.",
+    )
+    parser.add_argument(
+        "--pocket_device",
+        default="cpu",
+        help="Device used by Pocket TTS, for example cpu or cuda.",
+    )
+    parser.add_argument(
+        "--omnivoice_model",
+        default="k2-fsa/OmniVoice",
+        help="Hugging Face model ID or local OmniVoice checkpoint path.",
+    )
+    parser.add_argument(
+        "--omnivoice_voice_mode",
+        choices=["auto", "clone"],
+        default="auto",
+        help="Auto generates without prompts; clone reuses supplied reference voices.",
+    )
+    parser.add_argument(
+        "--omnivoice_device",
+        default="cuda:0",
+        help="OmniVoice device_map value, for example cuda:0, mps, or xpu.",
+    )
+    parser.add_argument(
+        "--omnivoice_align_device",
+        default="cuda",
+        help="Device used by WhisperX alignment with OmniVoice.",
+    )
+    parser.add_argument(
+        "--omnivoice_dtype",
+        choices=["float16", "bfloat16", "float32"],
+        default="float16",
+        help="Torch dtype used to load OmniVoice.",
+    )
+    parser.add_argument(
+        "--omnivoice_num_steps",
+        type=int,
+        default=32,
+        help="OmniVoice diffusion steps; 16 is faster, 32 favors quality.",
+    )
+    parser.add_argument(
+        "--omnivoice_prompt_cache_size",
+        type=int,
+        default=128,
+        help="Maximum reusable voice prompts kept in memory per worker.",
+    )
+    parser.add_argument(
+        "--align_model",
+        default="",
+        help="Optional Hugging Face wav2vec2 CTC model for WhisperX alignment. "
+        "Required for languages, including Indonesian, that have no WhisperX default.",
     )
     parser.add_argument(
         "--voices_dir",

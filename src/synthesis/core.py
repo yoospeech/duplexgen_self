@@ -1,3 +1,4 @@
+from src.language import instruction
 import json
 import re
 import random
@@ -190,6 +191,7 @@ def detect_turn_boundaries(client: OpenAI, model_name: str, text: str) -> List[i
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,
+            max_tokens=max(64, min(256, len(words) * 3)),
             extra_body=no_thinking_extra_body(model_name),
         )
         marked_text = _strip_think_tags(resp.choices[0].message.content or "").strip()
@@ -277,6 +279,8 @@ def predict_turn_taking_probabilities(
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.0,
+                max_tokens=96,
+                response_format={"type": "json_object"},
                 extra_body=no_thinking_extra_body(model_name),
             )
             raw_json = _strip_think_tags(resp.choices[0].message.content or "")
@@ -528,7 +532,8 @@ def generate_raw_content_turn(
          On failure we regenerate up to ``max_format_retries`` times with an
          explicit corrective reminder and slightly raised temperature.
     """
-    sys_prompt = ROLE_USER_TURN_PROMPT if role == "user" else ROLE_AI_TURN_PROMPT
+    role_prompt = ROLE_USER_TURN_PROMPT if role == "user" else ROLE_AI_TURN_PROMPT
+    sys_prompt = role_prompt + instruction()
     user_prompt = build_rewrite_user_prompt(
         role=role,
         full_source_turns=full_source_turns,

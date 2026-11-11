@@ -6,6 +6,7 @@ from typing import List, Tuple, Dict, Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 
 from openai import OpenAI
+from src.language import instruction
 from src.speechify_prompts import (
     SINGLE_STEP_CONVERSION_PROMPT,
     SINGLE_STEP_CONVERSION_PROMPT_CONCISE,
@@ -48,7 +49,7 @@ def speechify_full_dialogue(
     completion = client.beta.chat.completions.parse(
         model=llm_model_name,
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": system_prompt + instruction()},
             {"role": "user", "content": user_prompt},
         ],
         temperature=temperature,

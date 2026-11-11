@@ -12,8 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root
 
 # Note: build_boundary_annotation_queue is removed as the new logic
 # handles detection dynamically within speechify_turn_by_turn
+from src.language import set_language
 from src.llm_client import make_client
-from src.synthesis.core import speechify_turn_by_turn
+from src.synthesis.core import (
+    CONFIG,
+    detect_turn_boundaries,
+    insert_action_tokens_from_llm_annotations,
+    predict_turn_taking_probabilities,
+    predict_turn_taking_probabilities_hf,
+    speechify_turn_by_turn,
+)
 from src.synthesis.prompts import _normalize_ws
 
 
@@ -89,6 +97,74 @@ def extract_scenario(example: Dict[str, Any]) -> str:
     return "A generic conversation."
 
 
+def annotate_existing_turns(
+    source_turns: List[Tuple[str, str]],
+    scenario_description: str,
+    client_tt,
+    client_boundary,
+    tt_model_name: str,
+    boundary_model_name: str,
+    hf_model=None,
+    hf_tokenizer=None,
+    hf_max_seq_length: int = 1024,
+    hf_use_last_n_history: int = 4,
+    hf_batch_size: int = 8,
+) -> List[Dict[str, Any]]:
+    """Annotate fixed dialogue text with the normal Stage 2/3/4 machinery.
+
+    Unlike ``speechify_turn_by_turn``, this preserves every source utterance.
+    It is useful when Stage 1 was already run by another generator and only
+    turn-taking decisions should be added.
+    """
+    import random
+
+    annotated: List[Dict[str, Any]] = []
+    history_turns: List[Tuple[str, str, List[Dict[str, Any]]]] = []
+    rng = random.Random(CONFIG.get("sampling_seed", 42))
+
+    for role, raw_content in source_turns:
+        content = _normalize_ws(raw_content)
+        turn_history: List[Dict[str, Any]] = [{"full_content": content}]
+
+        if role == "user":
+            boundary_indices = detect_turn_boundaries(client_boundary, boundary_model_name, content)
+            if boundary_indices:
+                if hf_model is not None and hf_tokenizer is not None:
+                    distributions = predict_turn_taking_probabilities_hf(
+                        model=hf_model,
+                        tokenizer=hf_tokenizer,
+                        history_turns=history_turns,
+                        full_turn_text=content,
+                        boundary_indices=boundary_indices,
+                        max_seq_length=hf_max_seq_length,
+                        use_last_n_history=hf_use_last_n_history,
+                        batch_size=hf_batch_size,
+                    )
+                else:
+                    distributions = predict_turn_taking_probabilities(
+                        client=client_tt,
+                        model_name=tt_model_name,
+                        scenario_desc=scenario_description,
+                        history_turns=history_turns,
+                        full_turn_text=content,
+                        boundary_indices=boundary_indices,
+                    )
+                content, turn_history = insert_action_tokens_from_llm_annotations(
+                    text=content,
+                    boundary_word_indices=boundary_indices,
+                    boundary_dists=distributions,
+                    length_guard_start=CONFIG["length_guard_start"],
+                    length_guard_gap=CONFIG["length_guard_gap"],
+                    interruption_guard_start=CONFIG["interruption_guard_start"],
+                    rng=rng,
+                )
+
+        annotated.append({"role": role, "content": content, "history": turn_history})
+        history_turns.append((role, content, turn_history))
+
+    return annotated
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Apply turn-taking predictor (TOKEN_BC/TOKEN_FT insertion) using dynamic boundary detection and probability estimation."
@@ -105,6 +181,11 @@ def main():
     # dialogues writes (data-dialogues/ by default), or at Stage 1 output.
     parser.add_argument("--input_root", type=str, required=True)
     parser.add_argument("--save_root", type=str, default="outputs/generated_dialogues_with_tt")
+    parser.add_argument(
+        "--annotate_only",
+        action="store_true",
+        help="Preserve input utterances and only add Stage 2-4 turn-taking annotations.",
+    )
 
     parser.add_argument(
         "--max_dialogues",
@@ -185,7 +266,14 @@ def main():
     parser.add_argument("--temperature_user", type=float, default=0.7)
     parser.add_argument("--temperature_ai", type=float, default=0.7)
 
+    parser.add_argument(
+        "--language",
+        choices=["en", "id"],
+        default="en",
+        help="Language for generated utterances: en=English, id=Bahasa Indonesia.",
+    )
     args = parser.parse_args()
+    set_language(args.language)
 
     input_root = Path(args.input_root)
     save_root = Path(args.save_root)
@@ -242,25 +330,40 @@ def main():
             source_turns = ensure_source_turns(ex)
             scenario_desc = extract_scenario(ex)
 
-            utterances = speechify_turn_by_turn(
-                llm_model_name=args.llm_model_name,
-                client=client,
-                client_tt=client_tt,
-                client_boundary=client_boundary,
-                source_turns=source_turns,
-                scenario_description=scenario_desc,
-                max_turns=args.max_turns,
-                temperature_user=args.temperature_user,
-                temperature_ai=args.temperature_ai,
-                dataset=dataset,
-                tt_model_name=args.tt_model_name,
-                boundary_model_name=args.boundary_model_name,
-                hf_model=hf_model,
-                hf_tokenizer=hf_tokenizer,
-                hf_max_seq_length=args.hf_max_seq_length,
-                hf_use_last_n_history=args.hf_use_last_n_history,
-                hf_batch_size=args.hf_batch_size,
-            )
+            if args.annotate_only:
+                utterances = annotate_existing_turns(
+                    source_turns=source_turns,
+                    scenario_description=scenario_desc,
+                    client_tt=client_tt,
+                    client_boundary=client_boundary,
+                    tt_model_name=args.tt_model_name,
+                    boundary_model_name=args.boundary_model_name,
+                    hf_model=hf_model,
+                    hf_tokenizer=hf_tokenizer,
+                    hf_max_seq_length=args.hf_max_seq_length,
+                    hf_use_last_n_history=args.hf_use_last_n_history,
+                    hf_batch_size=args.hf_batch_size,
+                )
+            else:
+                utterances = speechify_turn_by_turn(
+                    llm_model_name=args.llm_model_name,
+                    client=client,
+                    client_tt=client_tt,
+                    client_boundary=client_boundary,
+                    source_turns=source_turns,
+                    scenario_description=scenario_desc,
+                    max_turns=args.max_turns,
+                    temperature_user=args.temperature_user,
+                    temperature_ai=args.temperature_ai,
+                    dataset=dataset,
+                    tt_model_name=args.tt_model_name,
+                    boundary_model_name=args.boundary_model_name,
+                    hf_model=hf_model,
+                    hf_tokenizer=hf_tokenizer,
+                    hf_max_seq_length=args.hf_max_seq_length,
+                    hf_use_last_n_history=args.hf_use_last_n_history,
+                    hf_batch_size=args.hf_batch_size,
+                )
 
             for u in utterances:
                 u["content"] = _normalize_ws(u["content"])
@@ -272,6 +375,8 @@ def main():
             result["meta"]["tt_model"] = args.hf_model_name_or_path or args.tt_model_name
             result["meta"]["tt_mode"] = "hf_classification" if hf_model else "llm_verbalized"
             result["meta"]["boundary_model"] = args.boundary_model_name
+            result["meta"]["language"] = args.language
+            result["meta"]["annotate_only"] = args.annotate_only
             result["meta"]["input_path"] = str(in_path)
 
             write_json(out_path, result)

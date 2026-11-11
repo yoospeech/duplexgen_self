@@ -1,0 +1,6 @@
+# OmniVoice should use a fresh Python environment because its current PyTorch
+# and Transformers requirements can conflict with the Chatterbox environment.
+torch==2.8.0
+torchaudio==2.8.0
+omnivoice==0.2.1
+soundfile

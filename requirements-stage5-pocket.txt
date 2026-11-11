@@ -1,0 +1,8 @@
+# Indonesian Stage 5 backend. Install in a separate Python 3.11 environment.
+torch>=2.5
+torchaudio>=2.5,<3
+pocket-tts==3.1.0
+nltk>=3.8
+silero-vad>=6.2.1
+whisperx>=3.3.1
+numpy>=2

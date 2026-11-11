@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "history": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {"type": "string", "enum": ["user", "assistant"]},
+          "content": {"type": "string"}
+        },
+        "required": ["role", "content"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["history"],
+  "additionalProperties": false
+}

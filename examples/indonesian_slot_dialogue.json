@@ -1,0 +1,58 @@
+{
+  "scenario": "reschedule interview",
+  "context": "A candidate asks to move an interview to Friday afternoon.",
+  "history": [
+    {
+      "role": "user",
+      "content": "Begini, saya mendapat jadwal wawancara pada Selasa pagi, [TAKE_FLOOR]",
+      "history": [
+        {
+          "full_content": "Begini, saya mendapat jadwal wawancara pada Selasa pagi, tetapi waktunya kurang cocok."
+        },
+        {
+          "word_index": 0,
+          "decision": "backchannel",
+          "inserted_token": "[BACKCHANNEL]",
+          "content": "benar"
+        },
+        {
+          "word_index": 7,
+          "decision": "floor_taking",
+          "inserted_token": "[TAKE_FLOOR]"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Baik, saya akan memeriksa jadwal yang tersedia untuk Anda.",
+      "history": [
+        {
+          "full_content": "Baik, saya akan memeriksa jadwal yang tersedia untuk Anda."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Kalau memungkinkan, saya lebih suka pukul satu siang.",
+      "history": [
+        {
+          "full_content": "Kalau memungkinkan, saya lebih suka pukul satu siang."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Jumat pukul satu siang tersedia.",
+      "history": [
+        {
+          "full_content": "Jumat pukul satu siang tersedia."
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "language": "id",
+    "example": true,
+    "turn_taking_applied": true
+  }
+}

@@ -11,6 +11,11 @@ __pycache__/
 .venv/
 venv/
 .venv-tts/
+.venv-tts-*/
+
+# Local model checkpoints and downloaded helper binaries
+.models/
+.local/
 
 # Pipeline outputs / local data
 outputs/

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 from tqdm import tqdm
 from openai import OpenAI
 
+from src.language import set_language
 from src.llm_client import make_client
 from src.speechify_datasets import (
     iter_negotiator,
@@ -359,7 +360,14 @@ def main():
         default=False,
         help="Parse and dump the source dialogues without calling the LLM.",
     )
+    parser.add_argument(
+        "--language",
+        choices=["en", "id"],
+        default="en",
+        help="Language for generated utterances: en=English, id=Bahasa Indonesia.",
+    )
     args = parser.parse_args()
+    set_language(args.language)
 
     client = None
     if not args.test_parse:

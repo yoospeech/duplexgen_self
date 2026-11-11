@@ -1,0 +1,7 @@
+Buat satu dialog lisan singkat dalam Bahasa Indonesia berdasarkan skenario ini:
+pengguna ingin memindahkan jadwal wawancara dari Selasa pagi ke Jumat siang.
+Asisten harus mengatakan bahwa ia akan memeriksa jadwal, lalu mengonfirmasi
+bahwa Jumat pukul satu siang tersedia. Buat tepat empat giliran yang bergantian:
+user, assistant, user, assistant. Jangan menambahkan nama, harga, tanggal, atau
+fakta yang tidak disebutkan. Keluarkan hanya objek JSON yang sesuai dengan
+schema, tanpa markdown atau penjelasan.

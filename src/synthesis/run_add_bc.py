@@ -20,6 +20,8 @@ PROMPT_KIND = "qwen"  # "qwen" (new, engineered) | "legacy" (original gpt prompt
 INPUT_ROOT = None
 OUTPUT_ROOT = None
 
+LANGUAGE = "en"
+
 client = None  # built in main() from the resolved config
 
 # ================================
@@ -83,6 +85,14 @@ Rules:
 
 def _build_messages(context: str):
     sys_p = SYSTEM_PROMPT_QWEN if PROMPT_KIND == "qwen" else SYSTEM_PROMPT
+    if LANGUAGE == "id":
+        sys_p = (
+            "Generate one natural Bahasa Indonesia listener backchannel at [INSERT]. "
+            "Output only 1-3 lowercase words, with no label or explanation. "
+            "Do not take the floor, introduce new facts, or ask for an answer. "
+            "Match the context and register. Suitable examples include iya, hmm, oh, "
+            "baik, benar, and oh begitu. Avoid English."
+        )
     return [
         {"role": "system", "content": sys_p},
         {
@@ -227,7 +237,14 @@ if __name__ == "__main__":
         help="qwen=new engineered prompt; legacy=original gpt prompt",
     )
 
+    parser.add_argument(
+        "--language",
+        choices=["en", "id"],
+        default="en",
+        help="Language for generated backchannels: en=English, id=Bahasa Indonesia.",
+    )
     args = parser.parse_args()
+    LANGUAGE = args.language
 
     MODEL_NAME = args.model_name
     PROMPT_KIND = args.prompt
