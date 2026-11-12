@@ -59,10 +59,12 @@ for executable in "${llm_python}" "${tts_python}"; do
 done
 
 if ! "${tts_python}" -c \
-  'import omnivoice, silero_vad, whisperx, nltk, nemo_text_processing' \
+  'import omnivoice, silero_vad, whisperx, nltk, nemo_text_processing; from transformers import HiggsAudioV2TokenizerModel' \
   >/dev/null 2>&1; then
   echo "The existing TTS environment is missing full-render dependencies." >&2
-  echo "Check: ${tts_python} -c 'import omnivoice, silero_vad, whisperx, nltk, nemo_text_processing'" >&2
+  echo "Check OmniVoice Transformers support with:" >&2
+  echo "  ${tts_python} -c 'from transformers import HiggsAudioV2TokenizerModel'" >&2
+  echo "OmniVoice 0.2.1 requires transformers>=5.3.0." >&2
   exit 2
 fi
 

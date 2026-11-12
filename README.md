@@ -136,7 +136,7 @@ interpreters before running it:
   -c 'import openai; print("LLM environment: OK")'
 
 .venv-tts-omnivoice/bin/python \
-  -c 'import omnivoice, silero_vad, whisperx, nltk, nemo_text_processing; print("TTS environment: OK")'
+  -c 'import omnivoice, silero_vad, whisperx, nltk, nemo_text_processing; from transformers import HiggsAudioV2TokenizerModel; print("TTS environment: OK")'
 ```
 
 If the second check reports a missing full-render dependency, install it
@@ -146,6 +146,20 @@ manually into the existing TTS environment:
 .venv-tts-omnivoice/bin/pip install \
   whisperx silero-vad nltk nemo-text-processing
 ```
+
+If OmniVoice fails with `cannot import name HiggsAudioV2TokenizerModel`, the
+TTS environment has an incompatible Transformers version. Repair only that
+environment and verify the required class:
+
+```bash
+.venv-tts-omnivoice/bin/pip install --upgrade 'transformers>=5.3.0'
+.venv-tts-omnivoice/bin/python -c \
+  'from transformers import HiggsAudioV2TokenizerModel; print("Higgs tokenizer: OK")'
+.venv-tts-omnivoice/bin/pip check
+```
+
+Do not apply this upgrade to the Chatterbox environment, which has a different
+Transformers constraint.
 
 Both tasks use the Stage 1–4 interpreter at
 `/home/ysw/workspace/anaconda3/envs/duplexgen/bin/python`, and the TTS
