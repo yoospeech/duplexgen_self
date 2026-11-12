@@ -74,6 +74,118 @@ OmniVoice is installed from the pinned PyPI release; no Git submodule is
 required. Chatterbox and Pocket TTS remain supported as alternative backends;
 install them in separate environments using [Stage 5](docs/stage5-tts.md).
 
+With the environments already installed and an OpenAI-compatible SEA-LION
+server running, one script performs LLM slot/turn-taking inference,
+backchannel generation, and two-GPU OmniVoice rendering:
+
+```bash
+bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+The script does not install or upgrade packages. Check both existing
+interpreters before running it:
+
+```bash
+/home/ysw/workspace/anaconda3/envs/duplexgen/bin/python \
+  -c 'import openai; print("LLM environment: OK")'
+
+.venv-tts-omnivoice/bin/python \
+  -c 'import omnivoice, silero_vad, whisperx, nltk, nemo_text_processing; print("TTS environment: OK")'
+```
+
+If the second check reports a missing full-render dependency, install it
+manually into the existing TTS environment:
+
+```bash
+.venv-tts-omnivoice/bin/pip install \
+  whisperx silero-vad nltk nemo-text-processing
+```
+
+The defaults use the existing
+`outputs/sea-lion-stage-input/text_dialogue_interviewer/train/*.json`, the
+Stage 1–4 interpreter at
+`/home/ysw/workspace/anaconda3/envs/duplexgen/bin/python`, and the TTS
+interpreter at `.venv-tts-omnivoice/bin/python`. Intermediate JSON, stereo
+audio, and per-stage logs are written under `outputs/` and `logs/`.
+
+The input tree must follow the Stage 4 layout:
+
+```text
+outputs/sea-lion-stage-input/
+└── text_dialogue_interviewer/
+    └── train/
+        ├── sea_lion_0001.json
+        └── sea_lion_0002.json
+```
+
+Start the OpenAI-compatible LLM server before the pipeline. For example:
+
+```bash
+vllm serve aisingapore/Llama-SEA-LION-v3-8B-IT \
+  --served-model-name aisingapore/Llama-SEA-LION-v3-8B-IT
+```
+
+Verify that the endpoint is ready:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+If the LLM server and OmniVoice use the same two GPUs, run interactively with
+a pause between them:
+
+```bash
+DUPLEXGEN_PAUSE_BEFORE_TTS=1 \
+  bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+After the two LLM stages finish, the script asks you to stop the LLM server.
+Terminate `vllm`, confirm with `nvidia-smi` that both GPUs are free, and then
+press Enter to begin the two OmniVoice shards. No pause is needed when the LLM
+endpoint runs on another server or on separate GPUs.
+
+Override the LLM server or interpreters with environment variables:
+
+```bash
+LLM_BASE_URL=http://localhost:8000/v1 \
+LLM_MODEL=aisingapore/Llama-SEA-LION-v3-8B-IT \
+LLM_PYTHON=/path/to/llm-env/bin/python \
+TTS_PYTHON=/path/to/omnivoice-env/bin/python \
+  bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+For a quick end-to-end trial, limit LLM input and TTS output together:
+
+```bash
+DUPLEXGEN_MAX_DIALOGUES=2 OMNIVOICE_NUM_STEPS=16 \
+  bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+The three steps and their outputs are:
+
+| Step | Output | Log |
+|---|---|---|
+| LLM slot and turn-taking inference | `outputs/sea-lion-with-tt/` | `logs/stage4-turn-taking.log` |
+| LLM backchannel generation | `outputs/sea-lion-with-tt-bc/` | `logs/stage4-backchannel.log` |
+| Two-GPU OmniVoice synthesis | `outputs/omnivoice-id-2gpu/` | `logs/omnivoice-shard-0.log`, `logs/omnivoice-shard-1.log` |
+
+Monitor both synthesis workers:
+
+```bash
+nvidia-smi
+tail -f logs/omnivoice-shard-0.log logs/omnivoice-shard-1.log
+```
+
+Inspect the generated files after completion:
+
+```bash
+find outputs/omnivoice-id-2gpu -type f | sort
+```
+
+The script exits before inference when an interpreter, dependency, LLM
+endpoint, or Stage 4 input is missing. If only one synthesis shard fails, its
+corresponding log contains the model or CUDA error.
+
 **Run everything from the repository root.** Stages 1-4 are modules of the
 `src/` package, invoked as `.venv/bin/python -m src.<module>`, not as file
 paths. The Stage 5 scripts are run as files with the *other* interpreter
