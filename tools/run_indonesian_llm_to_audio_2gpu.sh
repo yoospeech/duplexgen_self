@@ -5,11 +5,23 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 llm_python="${LLM_PYTHON:-/home/ysw/workspace/anaconda3/envs/duplexgen/bin/python}"
 tts_python="${TTS_PYTHON:-${repo_root}/.venv-tts-omnivoice/bin/python}"
 
-dataset="${DUPLEXGEN_DATASET:-interviewer}"
+mode="${DUPLEXGEN_MODE:-generate}"
+if [[ -n "${DUPLEXGEN_DATASET:-}" ]]; then
+  dataset="${DUPLEXGEN_DATASET}"
+elif [[ "${mode}" == "translate" ]]; then
+  dataset="interviewer"
+else
+  dataset="synthetic"
+fi
 split="${DUPLEXGEN_SPLIT:-train}"
-stage_input="${DUPLEXGEN_INPUT_ROOT:-${repo_root}/outputs/sea-lion-stage-input}"
-stage_tt="${DUPLEXGEN_TT_ROOT:-${repo_root}/outputs/sea-lion-with-tt}"
-stage_bc="${DUPLEXGEN_BC_ROOT:-${repo_root}/outputs/sea-lion-with-tt-bc}"
+if [[ "${mode}" == "translate" ]]; then
+  default_stage_input="${repo_root}/outputs/translated-corpus-dialogues"
+else
+  default_stage_input="${repo_root}/outputs/generated-domain-dialogues"
+fi
+stage_input="${DUPLEXGEN_INPUT_ROOT:-${default_stage_input}}"
+stage_tt="${DUPLEXGEN_TT_ROOT:-${repo_root}/outputs/${mode}-with-tt}"
+stage_bc="${DUPLEXGEN_BC_ROOT:-${repo_root}/outputs/${mode}-with-tt-bc}"
 audio_output="${DUPLEXGEN_AUDIO_ROOT:-${repo_root}/outputs/omnivoice-id-2gpu}"
 log_dir="${DUPLEXGEN_LOG_DIR:-${repo_root}/logs}"
 
@@ -19,6 +31,25 @@ llm_api_key="${LLM_API_KEY:-EMPTY}"
 num_steps="${OMNIVOICE_NUM_STEPS:-32}"
 max_dialogues="${DUPLEXGEN_MAX_DIALOGUES:-}"
 pause_before_tts="${DUPLEXGEN_PAUSE_BEFORE_TTS:-0}"
+generate_domains="${DUPLEXGEN_GENERATE_DOMAINS:-healthcare,finance,education,travel,shopping,customer_service,workplace,technology,public_services,daily_life}"
+num_dialogues="${DUPLEXGEN_NUM_DIALOGUES:-${DUPLEXGEN_MAX_DIALOGUES:-12}}"
+generate_dialogues="${DUPLEXGEN_GENERATE_DIALOGUES:-1}"
+data_root="${DUPLEXGEN_DATA_ROOT:-}"
+source_input_path="${DUPLEXGEN_SOURCE_INPUT_PATH:-}"
+test_dialogues="${DUPLEXGEN_TEST_DIALOGUES:-1}"
+
+if [[ "${mode}" != "generate" && "${mode}" != "translate" ]]; then
+  echo "DUPLEXGEN_MODE must be generate or translate." >&2
+  exit 2
+fi
+if [[ "${mode}" == "generate" && "${dataset}" != "synthetic" ]]; then
+  echo "Generate mode requires DUPLEXGEN_DATASET=synthetic." >&2
+  exit 2
+fi
+if [[ "${mode}" == "translate" && ( "${dataset}" == "synthetic" || "${dataset}" == "all" ) ]]; then
+  echo "Translate mode requires one source dataset, not ${dataset}." >&2
+  exit 2
+fi
 
 for executable in "${llm_python}" "${tts_python}"; do
   if [[ ! -x "${executable}" ]]; then
@@ -57,6 +88,42 @@ fi
 
 mkdir -p "${stage_tt}" "${stage_bc}" "${audio_output}" "${log_dir}"
 cd "${repo_root}"
+
+if [[ "${mode}" == "generate" && "${generate_dialogues}" == "1" ]]; then
+  echo "[0/3] Generate balanced Indonesian domain dialogues"
+  "${llm_python}" tools/generate_indonesian_domain_dialogues.py \
+    --output-root "${stage_input}" \
+    --dataset "${dataset}" \
+    --split "${split}" \
+    --domains "${generate_domains}" \
+    --num-dialogues "${num_dialogues}" \
+    --model "${llm_model}" \
+    --base-url "${llm_base_url}" \
+    --api-key "${llm_api_key}" \
+    2>&1 | tee "${log_dir}/stage0-domain-generation.log"
+elif [[ "${mode}" == "generate" ]]; then
+  echo "[0/3] Reuse existing domain dialogues from ${stage_input}"
+else
+  echo "[0/3] Translate the ${dataset} source corpus into spoken Indonesian"
+  stage1_cmd=(
+    "${llm_python}" -m src.speechify_run
+    --dataset "${dataset}"
+    --save_dir "${stage_input}"
+    --language id
+    --llm_model_name "${llm_model}"
+    --base_url "${llm_base_url}"
+    --api_key "${llm_api_key}"
+    --max_train_samples "${num_dialogues}"
+    --max_test_samples "${test_dialogues}"
+  )
+  if [[ -n "${data_root}" ]]; then
+    stage1_cmd+=(--data-root "${data_root}")
+  fi
+  if [[ -n "${source_input_path}" ]]; then
+    stage1_cmd+=(--input_path "${source_input_path}")
+  fi
+  "${stage1_cmd[@]}" 2>&1 | tee "${log_dir}/stage1-corpus-translation.log"
+fi
 
 stage4_cmd=(
   "${llm_python}" -m src.synthesis.run

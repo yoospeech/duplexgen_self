@@ -50,7 +50,15 @@ def _load_hf_tt_model(model_name_or_path: str, peft_path: Optional[str], load_in
     return model, tokenizer
 
 
-DATASET_CHOICES = ["socraticlm", "multiwoz", "interviewer", "negotiator", "persuader", "soda"]
+DATASET_CHOICES = [
+    "socraticlm",
+    "multiwoz",
+    "interviewer",
+    "negotiator",
+    "persuader",
+    "soda",
+]
+EXTRA_DATASET_CHOICES = ["synthetic"]
 SPLIT_CHOICES = ["train", "test"]
 
 
@@ -170,7 +178,11 @@ def main():
         description="Apply turn-taking predictor (TOKEN_BC/TOKEN_FT insertion) using dynamic boundary detection and probability estimation."
     )
     parser.add_argument(
-        "-d", "--dataset", type=str, choices=DATASET_CHOICES + ["all"], required=True
+        "-d",
+        "--dataset",
+        type=str,
+        choices=DATASET_CHOICES + EXTRA_DATASET_CHOICES + ["all"],
+        required=True,
     )
     parser.add_argument("-s", "--split", type=str, choices=SPLIT_CHOICES, required=True)
 

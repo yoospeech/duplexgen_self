@@ -73,14 +73,60 @@ python3.11 -m venv .venv-tts-omnivoice
 OmniVoice is installed from the pinned PyPI release; no Git submodule is
 required. Chatterbox and Pocket TTS remain supported as alternative backends;
 install them in separate environments using [Stage 5](docs/stage5-tts.md).
+The Chatterbox alternative uses `requirements-stage5.txt` in its own Python
+3.11 environment.
 
 With the environments already installed and an OpenAI-compatible SEA-LION
-server running, one script performs LLM slot/turn-taking inference,
-backchannel generation, and two-GPU OmniVoice rendering:
+server running, one script supports two independent input tasks and then runs
+the shared slot, turn-taking, backchannel, and two-GPU OmniVoice stages.
+
+### Task A: translate an existing source corpus
+
+This mode reads one of the six supported source datasets and rewrites its
+dialogues as natural spoken Indonesian before applying turn-taking. The default
+source is `interviewer`, which downloads automatically from Hugging Face:
 
 ```bash
-bash tools/run_indonesian_llm_to_audio_2gpu.sh
+DUPLEXGEN_MODE=translate \
+DUPLEXGEN_DATASET=interviewer \
+DUPLEXGEN_NUM_DIALOGUES=25 \
+  bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
+
+`soda` also downloads automatically. `multiwoz`, `negotiator`, and
+`socraticlm` require `DUPLEXGEN_DATA_ROOT`; `persuader` requires
+`DUPLEXGEN_SOURCE_INPUT_PATH`. Run one source dataset per invocation:
+
+```bash
+DUPLEXGEN_MODE=translate \
+DUPLEXGEN_DATASET=multiwoz \
+DUPLEXGEN_DATA_ROOT=/data/raw-dialogue-datasets \
+DUPLEXGEN_NUM_DIALOGUES=1000 \
+  bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+Translation mode preserves the source facts and scenarios. By default it
+converts the requested number of train dialogues plus one test dialogue; set
+`DUPLEXGEN_TEST_DIALOGUES` to change the latter.
+
+### Task B: generate new dialogues from domain names
+
+This mode needs no source corpus. It balances generation across a comma-
+separated domain list, invents a distinct topic and scenario, and writes a
+6–12 turn Indonesian dialogue for each item:
+
+```bash
+DUPLEXGEN_MODE=generate \
+DUPLEXGEN_GENERATE_DOMAINS=healthcare,finance,education,travel,daily_life \
+DUPLEXGEN_NUM_DIALOGUES=100 \
+  bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+The default is `generate` with 12 dialogues across ten domains:
+`healthcare`, `finance`, `education`, `travel`, `shopping`,
+`customer_service`, `workplace`, `technology`, `public_services`, and
+`daily_life`. Domain cycles are shuffled reproducibly and counts differ by at
+most one. Existing numbered JSON files are skipped, so rerunning resumes.
 
 The script does not install or upgrade packages. Check both existing
 interpreters before running it:
@@ -101,21 +147,19 @@ manually into the existing TTS environment:
   whisperx silero-vad nltk nemo-text-processing
 ```
 
-The defaults use the existing
-`outputs/sea-lion-stage-input/text_dialogue_interviewer/train/*.json`, the
-Stage 1–4 interpreter at
+Both tasks use the Stage 1–4 interpreter at
 `/home/ysw/workspace/anaconda3/envs/duplexgen/bin/python`, and the TTS
 interpreter at `.venv-tts-omnivoice/bin/python`. Intermediate JSON, stereo
 audio, and per-stage logs are written under `outputs/` and `logs/`.
 
-The input tree must follow the Stage 4 layout:
+Generated-domain mode creates this Stage 4 input layout automatically:
 
 ```text
-outputs/sea-lion-stage-input/
-└── text_dialogue_interviewer/
+outputs/generated-domain-dialogues/
+└── text_dialogue_synthetic/
     └── train/
-        ├── sea_lion_0001.json
-        └── sea_lion_0002.json
+        ├── synthetic_000000.json
+        └── synthetic_000001.json
 ```
 
 Start the OpenAI-compatible LLM server before the pipeline. For example:
@@ -139,7 +183,7 @@ DUPLEXGEN_PAUSE_BEFORE_TTS=1 \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
 
-After the two LLM stages finish, the script asks you to stop the LLM server.
+After all LLM stages finish, the script asks you to stop the LLM server.
 Terminate `vllm`, confirm with `nvidia-smi` that both GPUs are free, and then
 press Enter to begin the two OmniVoice shards. No pause is needed when the LLM
 endpoint runs on another server or on separate GPUs.
@@ -161,12 +205,14 @@ DUPLEXGEN_MAX_DIALOGUES=2 OMNIVOICE_NUM_STEPS=16 \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
 
-The three steps and their outputs are:
+The stages and their outputs are:
 
 | Step | Output | Log |
 |---|---|---|
-| LLM slot and turn-taking inference | `outputs/sea-lion-with-tt/` | `logs/stage4-turn-taking.log` |
-| LLM backchannel generation | `outputs/sea-lion-with-tt-bc/` | `logs/stage4-backchannel.log` |
+| Translate source corpus (`translate`) | `outputs/translated-corpus-dialogues/` | `logs/stage1-corpus-translation.log` |
+| Generate from domains (`generate`) | `outputs/generated-domain-dialogues/` | `logs/stage0-domain-generation.log` |
+| LLM slot and turn-taking inference | `outputs/<mode>-with-tt/` | `logs/stage4-turn-taking.log` |
+| LLM backchannel generation | `outputs/<mode>-with-tt-bc/` | `logs/stage4-backchannel.log` |
 | Two-GPU OmniVoice synthesis | `outputs/omnivoice-id-2gpu/` | `logs/omnivoice-shard-0.log`, `logs/omnivoice-shard-1.log` |
 
 Monitor both synthesis workers:
