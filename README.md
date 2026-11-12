@@ -34,6 +34,34 @@ Also: [using the released corpus](docs/CORPUS.md) ·
 
 ## Setup
 
+### Local SEA-LION 8B → OmniVoice (no LLM server)
+
+The shell runner now defaults to in-process Hugging Face inference. It downloads
+`aisingapore/Llama-SEA-LION-v3-8B-IT` on first use through Transformers and reuses
+the Hugging Face cache on subsequent stages. No endpoint or manually started
+server is required for this shell path.
+
+```bash
+LLM_PYTHON=/path/to/llm-env/bin/python \
+TTS_PYTHON=/path/to/omnivoice-env/bin/python \
+DUPLEXGEN_MODE=generate \
+DUPLEXGEN_GENERATE_DOMAINS=travel,education,shopping,daily_life \
+DUPLEXGEN_NUM_DIALOGUES=100 \
+bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+LLM_PYTHON must have CUDA-enabled PyTorch, Transformers and Accelerate installed.
+The model loads in float16 with `device_map="auto"`. Each LLM stage runs in a
+separate process and releases its model memory on exit, before OmniVoice starts.
+This currently reloads the cached model between text stages. Leave
+`DUPLEXGEN_PAUSE_BEFORE_TTS` unset for this local workflow. Set `HF_HOME` to a
+writable cache volume if needed. Actual two-GPU inference still needs validation
+on the target server.
+
+The endpoint-based instructions below are an alternative: set
+`DUPLEXGEN_LLM_BACKEND=api` explicitly to use them with the shell runner.
+The separate Python orchestrator still requires an endpoint.
+
 For the quickest Indonesian OmniVoice smoke test, including environment setup,
 model download, slot-based turn-taking, and stereo synthesis:
 
@@ -79,6 +107,9 @@ The Chatterbox alternative uses `requirements-stage5.txt` in its own Python
 With the environments already installed and an OpenAI-compatible SEA-LION
 server running, one script supports two independent input tasks and then runs
 the shared slot, turn-taking, backchannel, and two-GPU OmniVoice stages.
+The Python runner is recommended for production because it verifies CUDA,
+downloads OmniVoice once before worker launch, and isolates every run under a
+unique output directory.
 
 ### Task A: translate an existing source corpus
 
@@ -91,6 +122,16 @@ DUPLEXGEN_MODE=translate \
 DUPLEXGEN_DATASET=interviewer \
 DUPLEXGEN_NUM_DIALOGUES=25 \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+Python equivalent (recommended):
+
+```bash
+python3 tools/run_indonesian_llm_to_audio_2gpu.py \
+  --mode translate \
+  --dataset interviewer \
+  --num-dialogues 25 \
+  --pause-before-tts
 ```
 
 `soda` also downloads automatically. `multiwoz`, `negotiator`, and
@@ -121,6 +162,24 @@ DUPLEXGEN_GENERATE_DOMAINS=healthcare,finance,education,travel,daily_life \
 DUPLEXGEN_NUM_DIALOGUES=100 \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
+
+Python equivalent (recommended):
+
+```bash
+python3 tools/run_indonesian_llm_to_audio_2gpu.py \
+  --mode generate \
+  --domains healthcare,finance,education,travel,daily_life \
+  --num-dialogues 100 \
+  --gpus 0,1 \
+  --pause-before-tts
+```
+
+Each Python run writes only its own files under
+`outputs/runs/<YYYYMMDD-HHMMSS>/`, including `run.json`, intermediate JSON,
+audio, and logs. Pass `--run-id NAME` for a stable explicit directory. Set
+`--hf-home /data/huggingface-cache` to keep the one-time model download on a
+large shared volume, or pass `--omnivoice-model /data/models/OmniVoice` for an
+already downloaded local snapshot.
 
 The default is `generate` with 12 dialogues across ten domains:
 `healthcare`, `finance`, `education`, `travel`, `shopping`,

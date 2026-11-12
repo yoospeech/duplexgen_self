@@ -28,6 +28,7 @@ log_dir="${DUPLEXGEN_LOG_DIR:-${repo_root}/logs}"
 llm_model="${LLM_MODEL:-aisingapore/Llama-SEA-LION-v3-8B-IT}"
 llm_base_url="${LLM_BASE_URL:-http://localhost:8000/v1}"
 llm_api_key="${LLM_API_KEY:-EMPTY}"
+export DUPLEXGEN_LLM_BACKEND="${DUPLEXGEN_LLM_BACKEND:-local}"
 num_steps="${OMNIVOICE_NUM_STEPS:-32}"
 max_dialogues="${DUPLEXGEN_MAX_DIALOGUES:-}"
 pause_before_tts="${DUPLEXGEN_PAUSE_BEFORE_TTS:-0}"
@@ -68,6 +69,7 @@ if ! "${tts_python}" -c \
   exit 2
 fi
 
+if [[ "${DUPLEXGEN_LLM_BACKEND}" != "local" ]]; then
 if ! "${llm_python}" - "${llm_base_url}" "${llm_api_key}" <<'PY'
 import sys
 import urllib.request
@@ -86,6 +88,7 @@ PY
 then
   echo "Start the OpenAI-compatible LLM server, then rerun this script." >&2
   exit 2
+fi
 fi
 
 mkdir -p "${stage_tt}" "${stage_bc}" "${audio_output}" "${log_dir}"

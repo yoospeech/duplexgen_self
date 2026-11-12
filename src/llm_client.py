@@ -52,6 +52,10 @@ def make_client(
     OpenAI models ignore `api_key` / `base_url` and read `OPENAI_API_KEY`;
     everything else posts to `base_url` with `api_key`.
     """
+    if os.getenv("DUPLEXGEN_LLM_BACKEND") == "local":
+        from src.local_llm import local_client
+
+        return local_client(model_name)
     if is_openai_model(model_name):
         key = os.getenv("OPENAI_API_KEY")
         if not key:
