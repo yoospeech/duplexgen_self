@@ -125,12 +125,12 @@ This is only a connectivity test. The 0.6B model may produce weak dialogue or
 incorrect role ordering and should not be used to build a production dataset.
 
 For production, use a stronger model trained for Southeast Asian languages,
-such as `aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT`, through an OpenAI-compatible
+such as `aisingapore/Qwen-SEA-LION-v4-32B-IT`, through an OpenAI-compatible
 server:
 
 ```bash
-vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
-  --tensor-parallel-size 2 --max-model-len 32768
+vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT \
+  --dtype float16 --tensor-parallel-size 2 --max-model-len 32768
 ```
 
 ## Generate spoken Indonesian dialogue
@@ -163,7 +163,7 @@ special turn-taking tokens.
   --dataset interviewer \
   --save_dir results-id/ \
   --language id \
-  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --base_url http://localhost:8000/v1 \
   --api_key EMPTY
 ```
@@ -179,13 +179,13 @@ turn-taking predictor to the local endpoint:
   --input_root data-dialogues/ \
   --save_root outputs/generated-dialogues-id \
   --language id \
-  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --base_url http://localhost:8000/v1 \
   --api_key EMPTY \
-  --boundary_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --boundary_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --boundary_base_url http://localhost:8000/v1 \
   --boundary_api_key EMPTY \
-  --tt_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --tt_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --tt_base_url http://localhost:8000/v1 \
   --tt_api_key EMPTY
 ```

@@ -145,7 +145,7 @@ def main() -> None:
     parser.add_argument("--min-turns", type=int, default=6)
     parser.add_argument("--max-turns", type=int, default=12)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", default="aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT")
+    parser.add_argument("--model", default="aisingapore/Qwen-SEA-LION-v4-32B-IT")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--api-key", default="EMPTY")
     args = parser.parse_args()

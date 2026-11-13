@@ -34,10 +34,10 @@ Also: [using the released corpus](docs/CORPUS.md) ·
 
 ## Setup
 
-### Local SEA-LION 32B 4-bit → OmniVoice (no LLM server)
+### Local SEA-LION 32B FP16 → OmniVoice (no LLM server)
 
 The shell runner now defaults to in-process Hugging Face inference. It downloads
-`aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT` on first use through Transformers and reuses
+`aisingapore/Qwen-SEA-LION-v4-32B-IT` on first use through Transformers and reuses
 the Hugging Face cache on subsequent stages. No endpoint or manually started
 server is required for this shell path.
 
@@ -51,7 +51,7 @@ bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
 
 LLM_PYTHON must have CUDA-enabled PyTorch, Transformers and Accelerate installed.
-The model uses its pre-quantized 4-bit weights with `device_map="auto"`. Each LLM stage runs in a
+The model loads non-quantized weights in FP16 with `device_map="auto"`. Each LLM stage runs in a
 separate process and releases its model memory on exit, before OmniVoice starts.
 This currently reloads the cached model between text stages. Leave
 `DUPLEXGEN_PAUSE_BEFORE_TTS` unset for this local workflow. Set `HF_HOME` to a
@@ -243,9 +243,9 @@ outputs/generated-domain-dialogues/
 Start the OpenAI-compatible LLM server before the pipeline. For example:
 
 ```bash
-vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
-  --served-model-name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
-  --tensor-parallel-size 2 --max-model-len 32768
+vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT \
+  --served-model-name aisingapore/Qwen-SEA-LION-v4-32B-IT \
+  --dtype float16 --tensor-parallel-size 2 --max-model-len 32768
 ```
 
 Verify that the endpoint is ready:
@@ -271,7 +271,7 @@ Override the LLM server or interpreters with environment variables:
 
 ```bash
 LLM_BASE_URL=http://localhost:8000/v1 \
-LLM_MODEL=aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+LLM_MODEL=aisingapore/Qwen-SEA-LION-v4-32B-IT \
 LLM_PYTHON=/path/to/llm-env/bin/python \
 TTS_PYTHON=/path/to/omnivoice-env/bin/python \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
@@ -408,13 +408,13 @@ serve the open-weight SEA-LION model, which is trained for Southeast Asian
 languages:
 
 ```bash
-vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
-  --tensor-parallel-size 2 --max-model-len 32768
+vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT \
+  --dtype float16 --tensor-parallel-size 2 --max-model-len 32768
 
 .venv/bin/python -m src.speechify_run \
   --dataset interviewer --save_dir results-id/ \
   --language id \
-  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --base_url http://localhost:8000/v1 --api_key EMPTY
 
 .venv/bin/python -m src.synthesis.run \
@@ -422,11 +422,11 @@ vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
   --input_root data-dialogues/ \
   --save_root outputs/generated-dialogues-id \
   --language id \
-  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --base_url http://localhost:8000/v1 --api_key EMPTY \
-  --boundary_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --boundary_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --boundary_base_url http://localhost:8000/v1 --boundary_api_key EMPTY \
-  --tt_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --tt_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT \
   --tt_base_url http://localhost:8000/v1 --tt_api_key EMPTY
 ```
 
