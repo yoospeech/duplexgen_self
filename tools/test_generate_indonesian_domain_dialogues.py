@@ -1,5 +1,3 @@
-import pytest
-
 from tools.generate_indonesian_domain_dialogues import (
     balanced_domain_plan,
     parse_dialogue_response,
@@ -33,15 +31,31 @@ def test_parse_dialogue_response_validates_and_normalizes():
     assert result["meta"]["synthetic"] is True
 
 
-def test_parse_dialogue_response_rejects_wrong_role_order():
+def test_parse_dialogue_response_allows_assistant_greeting_first():
     raw = """{
       "topic": "hotel",
       "scenario": "memesan kamar",
       "history": [
-        {"role": "assistant", "content": "Halo"},
-        {"role": "user", "content": "Halo"}
+        {"role": "assistant", "content": "Selamat datang, ada yang bisa saya bantu?"},
+        {"role": "user", "content": "Saya ingin memesan kamar."}
       ]
     }"""
 
-    with pytest.raises(ValueError, match="role=user"):
-        parse_dialogue_response(raw, "travel", 2, 4)
+    result = parse_dialogue_response(raw, "travel", 2, 4)
+
+    assert [turn["role"] for turn in result["history"]] == ["assistant", "user"]
+
+
+def test_parse_dialogue_response_normalizes_roles_after_first_speaker():
+    raw = """{
+      "topic": "hotel",
+      "scenario": "memesan kamar",
+      "history": [
+        {"role": "user", "content": "Saya ingin memesan kamar."},
+        {"role": "user", "content": "Tentu, untuk tanggal berapa?"}
+      ]
+    }"""
+
+    result = parse_dialogue_response(raw, "travel", 2, 4)
+
+    assert [turn["role"] for turn in result["history"]] == ["user", "assistant"]

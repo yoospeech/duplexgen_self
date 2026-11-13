@@ -43,7 +43,11 @@ def balanced_domain_plan(domains: list[str], count: int, seed: int) -> list[str]
 
 
 def parse_dialogue_response(
-    raw: str, domain: str, min_turns: int, max_turns: int
+    raw: str,
+    domain: str,
+    min_turns: int,
+    max_turns: int,
+    opening_role: str | None = None,
 ) -> dict[str, Any]:
     """Extract and validate the generator's JSON object."""
     cleaned = raw.split("</think>")[-1].strip()
@@ -62,18 +66,25 @@ def parse_dialogue_response(
     if not isinstance(history, list) or not min_turns <= len(history) <= max_turns:
         raise ValueError(f"history must contain {min_turns}-{max_turns} turns")
 
+    first_role = opening_role or str(history[0].get("role", "")).strip().lower()
+    if first_role not in {"user", "assistant"}:
+        first_role = "user"
+
     normalized = []
     for index, turn in enumerate(history):
         if not isinstance(turn, dict):
             raise ValueError("every turn must be an object")
-        expected_role = "user" if index % 2 == 0 else "assistant"
-        role = str(turn.get("role", "")).lower()
+        if index % 2 == 0:
+            expected_role = first_role
+        else:
+            expected_role = "assistant" if first_role == "user" else "user"
         content = turn.get("content")
-        if role != expected_role:
-            raise ValueError(f"turn {index} must use role={expected_role}")
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"turn {index} has empty content")
-        normalized.append({"role": role, "content": content.strip()})
+        # Either participant may open the conversation. Once the first speaker
+        # is known, turn position is authoritative: normalize duplicated or
+        # missing labels instead of discarding an otherwise valid dialogue.
+        normalized.append({"role": expected_role, "content": content.strip()})
 
     return {
         "scenario": scenario.strip(),
@@ -88,8 +99,14 @@ def build_messages(
     min_turns: int,
     max_turns: int,
     recent_topics: list[str],
+    opening_role: str,
 ) -> list[dict[str, str]]:
     avoid = ", ".join(recent_topics[-30:]) if recent_topics else "none"
+    opening_instruction = (
+        "Start with user making a request or raising the topic."
+        if opening_role == "user"
+        else "Start with assistant giving a short, natural greeting before the user responds."
+    )
     return [
         {
             "role": "system",
@@ -107,8 +124,9 @@ def build_messages(
                 "Invent a specific topic and situation inside this domain, then write a complete "
                 "spoken dialogue. Vary goals, roles, setting, formality, emotion, and difficulty. "
                 f"Avoid topics already used: {avoid}.\n"
-                f"Use an even number of turns between {min_turns} and {max_turns}. Start with user "
-                "and alternate user/assistant exactly. Keep each turn concise but substantive. "
+                f"Use an even number of turns between {min_turns} and {max_turns}. "
+                f"{opening_instruction} After the opening turn, alternate user/assistant exactly. "
+                "Keep each turn concise but substantive. "
                 "Use only natural Indonesian in content.\n"
                 'Schema: {"topic": string, "scenario": string, "history": '
                 '[{"role": "user"|"assistant", "content": string}]}'
@@ -127,7 +145,7 @@ def main() -> None:
     parser.add_argument("--min-turns", type=int, default=6)
     parser.add_argument("--max-turns", type=int, default=12)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", default="aisingapore/Llama-SEA-LION-v3-8B-IT")
+    parser.add_argument("--model", default="aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--api-key", default="EMPTY")
     args = parser.parse_args()
@@ -153,7 +171,9 @@ def main() -> None:
     client = make_client(args.model, args.api_key, args.base_url)
     plan = balanced_domain_plan(domains, args.num_dialogues, args.seed)
     generated = skipped = 0
+    opening_rng = random.Random(args.seed)
     for index, domain in enumerate(plan):
+        opening_role = opening_rng.choice(["user", "assistant"])
         output_path = output_dir / f"synthetic_{index:06d}.json"
         if output_path.exists():
             skipped += 1
@@ -164,15 +184,34 @@ def main() -> None:
             try:
                 response = client.chat.completions.create(
                     model=args.model,
-                    messages=build_messages(domain, args.min_turns, args.max_turns, recent_topics),
+                    messages=build_messages(
+                        domain,
+                        args.min_turns,
+                        args.max_turns,
+                        recent_topics,
+                        opening_role,
+                    ),
                     temperature=min(1.0, 0.8 + attempt * 0.1),
                     max_tokens=1400,
                     response_format={"type": "json_object"},
                     extra_body=no_thinking_extra_body(args.model),
                 )
                 raw = response.choices[0].message.content or ""
-                dialogue = parse_dialogue_response(raw, domain, args.min_turns, args.max_turns)
-                dialogue["meta"].update({"model": args.model, "seed": args.seed, "index": index})
+                dialogue = parse_dialogue_response(
+                    raw,
+                    domain,
+                    args.min_turns,
+                    args.max_turns,
+                    opening_role=opening_role,
+                )
+                dialogue["meta"].update(
+                    {
+                        "model": args.model,
+                        "seed": args.seed,
+                        "index": index,
+                        "opening_role": opening_role,
+                    }
+                )
                 output_path.write_text(
                     json.dumps(dialogue, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
                 )

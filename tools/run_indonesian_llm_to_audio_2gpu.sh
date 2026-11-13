@@ -25,7 +25,7 @@ stage_bc="${DUPLEXGEN_BC_ROOT:-${repo_root}/outputs/${mode}-with-tt-bc}"
 audio_output="${DUPLEXGEN_AUDIO_ROOT:-${repo_root}/outputs/omnivoice-id-2gpu}"
 log_dir="${DUPLEXGEN_LOG_DIR:-${repo_root}/logs}"
 
-llm_model="${LLM_MODEL:-aisingapore/Llama-SEA-LION-v3-8B-IT}"
+llm_model="${LLM_MODEL:-aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT}"
 llm_base_url="${LLM_BASE_URL:-http://localhost:8000/v1}"
 llm_api_key="${LLM_API_KEY:-EMPTY}"
 export DUPLEXGEN_LLM_BACKEND="${DUPLEXGEN_LLM_BACKEND:-local}"

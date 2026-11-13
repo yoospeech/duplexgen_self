@@ -34,10 +34,10 @@ Also: [using the released corpus](docs/CORPUS.md) ·
 
 ## Setup
 
-### Local SEA-LION 8B → OmniVoice (no LLM server)
+### Local SEA-LION 32B 4-bit → OmniVoice (no LLM server)
 
 The shell runner now defaults to in-process Hugging Face inference. It downloads
-`aisingapore/Llama-SEA-LION-v3-8B-IT` on first use through Transformers and reuses
+`aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT` on first use through Transformers and reuses
 the Hugging Face cache on subsequent stages. No endpoint or manually started
 server is required for this shell path.
 
@@ -51,7 +51,7 @@ bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
 
 LLM_PYTHON must have CUDA-enabled PyTorch, Transformers and Accelerate installed.
-The model loads in float16 with `device_map="auto"`. Each LLM stage runs in a
+The model uses its pre-quantized 4-bit weights with `device_map="auto"`. Each LLM stage runs in a
 separate process and releases its model memory on exit, before OmniVoice starts.
 This currently reloads the cached model between text stages. Leave
 `DUPLEXGEN_PAUSE_BEFORE_TTS` unset for this local workflow. Set `HF_HOME` to a
@@ -104,12 +104,17 @@ install them in separate environments using [Stage 5](docs/stage5-tts.md).
 The Chatterbox alternative uses `requirements-stage5.txt` in its own Python
 3.11 environment.
 
-With the environments already installed and an OpenAI-compatible SEA-LION
-server running, one script supports two independent input tasks and then runs
-the shared slot, turn-taking, backchannel, and two-GPU OmniVoice stages.
-The Python runner is recommended for production because it verifies CUDA,
-downloads OmniVoice once before worker launch, and isolates every run under a
-unique output directory.
+With the environments already installed, the shell runner supports two
+independent input tasks and then runs the shared slot, turn-taking,
+backchannel, and two-GPU OmniVoice stages. It is the recommended entry point
+and can be invoked from any directory with its absolute path:
+
+```bash
+bash /home/ysw/Documents/eee/duplexgen_self/tools/run_indonesian_llm_to_audio_2gpu.sh
+```
+
+The separate Python orchestrator remains available when unique per-run output
+directories and an explicitly managed OpenAI-compatible endpoint are useful.
 
 ### Task A: translate an existing source corpus
 
@@ -124,7 +129,7 @@ DUPLEXGEN_NUM_DIALOGUES=25 \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
 
-Python equivalent (recommended):
+Python orchestrator alternative:
 
 ```bash
 python3 tools/run_indonesian_llm_to_audio_2gpu.py \
@@ -163,7 +168,7 @@ DUPLEXGEN_NUM_DIALOGUES=100 \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
 ```
 
-Python equivalent (recommended):
+Python orchestrator alternative:
 
 ```bash
 python3 tools/run_indonesian_llm_to_audio_2gpu.py \
@@ -238,8 +243,9 @@ outputs/generated-domain-dialogues/
 Start the OpenAI-compatible LLM server before the pipeline. For example:
 
 ```bash
-vllm serve aisingapore/Llama-SEA-LION-v3-8B-IT \
-  --served-model-name aisingapore/Llama-SEA-LION-v3-8B-IT
+vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --served-model-name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --tensor-parallel-size 2 --max-model-len 32768
 ```
 
 Verify that the endpoint is ready:
@@ -265,7 +271,7 @@ Override the LLM server or interpreters with environment variables:
 
 ```bash
 LLM_BASE_URL=http://localhost:8000/v1 \
-LLM_MODEL=aisingapore/Llama-SEA-LION-v3-8B-IT \
+LLM_MODEL=aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
 LLM_PYTHON=/path/to/llm-env/bin/python \
 TTS_PYTHON=/path/to/omnivoice-env/bin/python \
   bash tools/run_indonesian_llm_to_audio_2gpu.sh
@@ -402,12 +408,13 @@ serve the open-weight SEA-LION model, which is trained for Southeast Asian
 languages:
 
 ```bash
-vllm serve aisingapore/Llama-SEA-LION-v3-8B-IT
+vllm serve aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
+  --tensor-parallel-size 2 --max-model-len 32768
 
 .venv/bin/python -m src.speechify_run \
   --dataset interviewer --save_dir results-id/ \
   --language id \
-  --llm_model_name aisingapore/Llama-SEA-LION-v3-8B-IT \
+  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
   --base_url http://localhost:8000/v1 --api_key EMPTY
 
 .venv/bin/python -m src.synthesis.run \
@@ -415,11 +422,11 @@ vllm serve aisingapore/Llama-SEA-LION-v3-8B-IT
   --input_root data-dialogues/ \
   --save_root outputs/generated-dialogues-id \
   --language id \
-  --llm_model_name aisingapore/Llama-SEA-LION-v3-8B-IT \
+  --llm_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
   --base_url http://localhost:8000/v1 --api_key EMPTY \
-  --boundary_model_name aisingapore/Llama-SEA-LION-v3-8B-IT \
+  --boundary_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
   --boundary_base_url http://localhost:8000/v1 --boundary_api_key EMPTY \
-  --tt_model_name aisingapore/Llama-SEA-LION-v3-8B-IT \
+  --tt_model_name aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT \
   --tt_base_url http://localhost:8000/v1 --tt_api_key EMPTY
 ```
 

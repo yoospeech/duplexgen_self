@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tts-python", type=Path, default=REPO_ROOT / ".venv-tts-omnivoice/bin/python"
     )
-    parser.add_argument("--llm-model", default="aisingapore/Llama-SEA-LION-v3-8B-IT")
+    parser.add_argument("--llm-model", default="aisingapore/Qwen-SEA-LION-v4-32B-IT-4BIT")
     parser.add_argument("--llm-base-url", default="http://localhost:8000/v1")
     parser.add_argument("--llm-api-key", default="EMPTY")
     parser.add_argument("--omnivoice-model", default="k2-fsa/OmniVoice")
